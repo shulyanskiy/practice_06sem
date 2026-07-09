@@ -9,24 +9,27 @@ class MyAntenn : public IAntenn
 {
     Q_OBJECT
 public:
-    explicit MyAntenn(QObject* parent = nullptr);
+    explicit MyAntenn(const QString& type = "Default", QObject* parent = nullptr);
     ~MyAntenn();
 
-    // Управление
-    bool setAzimuth(double azimuth) override;
-    bool setElevation(double elevation) override;
-    bool setPolarization(double polarization) override;
-    bool setSpeedMode(int mode) override;
-    void calibrate() override;
-    bool start() override;
-    bool stop() override;
+    // РЈРїСЂР°РІР»РµРЅРёРµ (РІСЃРµ void)
+    void setAzimuth(double azimuth) override;
+    void setElevation(double elevation) override;
+    void setPolarization(double polarization) override;
+    void setPosition(double azimuth, double elevation, double polarization) override;
+    void setSpeedMode(int mode) override;
+    void reset() override;
+    void start() override;
+    void stop() override;
     bool isRunning() const override;
 
-    // Геттеры
+    // Р“РµС‚С‚РµСЂС‹
     AntennaStatus getStatus() const override;
     AntennaConfig getConfig() const override;
+    QString getAntennaType() const override { return m_antennaType; }
 
-    // Конфигурация
+    // РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ
+    void applyConfig() override;
     bool loadConfig(const QString& configPath) override;
     bool saveConfig(const QString& configPath) override;
     QString getConfigPath() const override;
@@ -36,12 +39,13 @@ protected:
 
 private:
     void processMovement();
-    void applyConfig();
     void loadLimits();
-    void loadDefaultConfig();
 
 private:
-    // Параметры антенны
+    // РўРёРї Р°РЅС‚РµРЅРЅС‹
+    QString m_antennaType;
+
+    // РџР°СЂР°РјРµС‚СЂС‹ Р°РЅС‚РµРЅРЅС‹
     double m_azimuth;
     double m_elevation;
     double m_polarization;
@@ -51,7 +55,7 @@ private:
     double m_currentSpeed;
     int m_speedMode;
 
-    // Ограничения
+    // РћРіСЂР°РЅРёС‡РµРЅРёСЏ
     double m_minAzimuth;
     double m_maxAzimuth;
     double m_minElevation;
@@ -60,33 +64,35 @@ private:
     double m_maxPolarization;
     double m_maxSpeed;
 
-    // Состояние
+    // РЎРѕСЃС‚РѕСЏРЅРёРµ
     bool m_isMoving;
     QAtomicInt m_isRunning;
     bool m_isCalibrated;
 
-    // Встроенный таймер
+    // Р’СЃС‚СЂРѕРµРЅРЅС‹Р№ С‚Р°Р№РјРµСЂ
     int m_timerId;
     bool m_timerActive;
 
-    // Защита данных
+    // Р—Р°С‰РёС‚Р° РґР°РЅРЅС‹С…
     mutable QMutex m_dataMutex;
 
-    // Статистика
+    // РЎС‚Р°С‚РёСЃС‚РёРєР°
     QDateTime m_startTime;
 
-    // Конфигурация
+    // РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ
     QString m_configPath;
     QSettings* m_settings;
 
-    // Скорости по режимам
+    // РЎРєРѕСЂРѕСЃС‚Рё РїРѕ СЂРµР¶РёРјР°Рј
     QList<double> m_speedModes;
     QList<QString> m_speedModeNames;
+
+
     double m_defaultAzimuth;
     double m_defaultElevation;
     double m_defaultPolarization;
     int m_defaultSpeedMode;
 
     static constexpr int MOVEMENT_INTERVAL_MS = 50;
-    static const QString DEFAULT_CONFIG_PATH;
 };
+

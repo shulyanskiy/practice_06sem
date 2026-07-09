@@ -13,9 +13,9 @@
 #include <QByteArray>
 #include <QMap>
 #include <QList>
+#include <QPointer>
 
-
-// Структура для лимитов антенны
+// РЎС‚СЂСѓРєС‚СѓСЂР° РґР»СЏ Р»РёРјРёС‚РѕРІ Р°РЅС‚РµРЅРЅС‹
 struct AntennaLimits {
     double minAzimuth;
     double maxAzimuth;
@@ -37,7 +37,7 @@ struct AntennaLimits {
     }
 };
 
-// Структура для режима скорости
+// РЎС‚СЂСѓРєС‚СѓСЂР° РґР»СЏ СЂРµР¶РёРјР° СЃРєРѕСЂРѕСЃС‚Рё
 struct SpeedMode {
     int id;
     QString name;
@@ -47,7 +47,7 @@ struct SpeedMode {
     SpeedMode(int i, const QString& n, double s) : id(i), name(n), speed(s) {}
 };
 
-// Структура для полной конфигурации антенны
+// РЎС‚СЂСѓРєС‚СѓСЂР° РґР»СЏ РїРѕР»РЅРѕР№ РєРѕРЅС„РёРіСѓСЂР°С†РёРё Р°РЅС‚РµРЅРЅС‹
 struct AntennaConfig {
     AntennaLimits limits;
     QList<SpeedMode> speedModes;
@@ -65,8 +65,9 @@ struct AntennaConfig {
     }
 };
 
-// Структура для статуса антенны
+// РЎС‚СЂСѓРєС‚СѓСЂР° РґР»СЏ СЃС‚Р°С‚СѓСЃР° Р°РЅС‚РµРЅРЅС‹
 struct AntennaStatus {
+    QString type;
     double azimuth;
     double elevation;
     double polarization;
@@ -82,6 +83,7 @@ struct AntennaStatus {
 
     AntennaStatus()
         : azimuth(0.0)
+        , type("")
         , elevation(0.0)
         , polarization(0.0)
         , targetAzimuth(0.0)
@@ -97,8 +99,7 @@ struct AntennaStatus {
     }
 };
 
-
-// Интерфейс антенны
+// РРЅС‚РµСЂС„РµР№СЃ Р°РЅС‚РµРЅРЅС‹
 class IAntenn : public QObject
 {
     Q_OBJECT
@@ -106,21 +107,24 @@ public:
     explicit IAntenn(QObject* parent = nullptr) : QObject(parent) {}
     virtual ~IAntenn() = default;
 
-    // Управление
-    virtual bool setAzimuth(double azimuth) = 0;
-    virtual bool setElevation(double elevation) = 0;
-    virtual bool setPolarization(double polarization) = 0;
-    virtual bool setSpeedMode(int mode) = 0;
-    virtual void calibrate() = 0;
-    virtual bool start() = 0;
-    virtual bool stop() = 0;
+    // РЈРїСЂР°РІР»РµРЅРёРµ (РІСЃРµ void, РєСЂРѕРјРµ getStatus)
+    virtual void setAzimuth(double azimuth) = 0;
+    virtual void setElevation(double elevation) = 0;
+    virtual void setPolarization(double polarization) = 0;
+    virtual void setPosition(double azimuth, double elevation, double polarization) = 0;
+    virtual void setSpeedMode(int mode) = 0;
+    virtual void reset() = 0;
+    virtual void start() = 0;
+    virtual void stop() = 0;
     virtual bool isRunning() const = 0;
 
-    // Геттеры
+    // Р“РµС‚С‚РµСЂС‹
     virtual AntennaStatus getStatus() const = 0;
     virtual AntennaConfig getConfig() const = 0;
+    virtual QString getAntennaType() const = 0;
 
-    // Конфигурация
+    // РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ
+    virtual void applyConfig() = 0;
     virtual bool loadConfig(const QString& configPath) = 0;
     virtual bool saveConfig(const QString& configPath) = 0;
     virtual QString getConfigPath() const = 0;
@@ -131,36 +135,41 @@ signals:
     void errorOccurred(const QString& message);
     void movementStarted();
     void movementStopped();
-    void calibrated();
+    void resetDone();
 };
 
 
 
-// Менеджер эмулятора
+// РњРµРЅРµРґР¶РµСЂ СЌРјСѓР»СЏС‚РѕСЂР°
 class EmuManager : public QObject
 {
     Q_OBJECT
 public:
-    explicit EmuManager(IAntenn* antenn, QObject* parent = nullptr);
+    explicit EmuManager(QObject* parent = nullptr);
     ~EmuManager();
 
-    // Управление сервером
+    // РЈРїСЂР°РІР»РµРЅРёРµ Р°РЅС‚РµРЅРЅРѕР№
+    void setAntenna(IAntenn* antenn);
+    IAntenn* getAntenna() const { return m_p_antenn; }
+
+    // РЈРїСЂР°РІР»РµРЅРёРµ СЃРµСЂРІРµСЂРѕРј
     bool start(quint16 port);
     void stop();
     bool isRunning() const;
     bool hasClient() const;
     quint16 getPort() const { return m_serverPort; }
 
-    // Отправка данных клиенту
+    // РћС‚РїСЂР°РІРєР° РґР°РЅРЅС‹С… РєР»РёРµРЅС‚Сѓ
     void sendToClient(const QByteArray& data);
-    void sendToAllClients(const QByteArray& data);
 
-
-    // Обработка команд
+    // РћР±СЂР°Р±РѕС‚РєР° РєРѕРјР°РЅРґ
     QByteArray execCMD(const QByteArray& request);
 
+    // РџРѕР»СѓС‡РµРЅРёРµ СЃРїРёСЃРєР° С‚РёРїРѕРІ Р°РЅС‚РµРЅРЅ
+    QStringList getAntennaTypes() const;
+    bool selectAntennaType(const QString& type);
+
 signals:
-    // Сигналы состояния сервера
     void serverStarted(quint16 port);
     void serverStopped();
     void clientConnected();
@@ -168,10 +177,11 @@ signals:
     void dataFromClient(const QByteArray& data);
     void commandExecuted(const QString& command, bool success);
 
-    // Сигналы логирования
+    // РЎРёРіРЅР°Р»С‹ Р»РѕРіРёСЂРѕРІР°РЅРёСЏ
     void infoOccurred(const QString& message);
     void warningOccurred(const QString& message);
     void errorOccurred(const QString& message);
+    void logRawData(const QString& direction, const QByteArray& data);
 
 private slots:
     void onClientConnected();
@@ -216,24 +226,31 @@ private:
     QByteArray cmdStatus();
     QByteArray cmdDisconnect();
     QByteArray cmdAntennStatus();
-    QByteArray cmdConfig();
+    QByteArray cmdGetAntennaTypes();
+    QByteArray cmdSelectAntennaType(const QString& type);
     bool isCommandValid(const ParsedCMD& cmd, int expectedParams = 0) const;
     QByteArray createErrorResponse(const QString& error) const;
     QByteArray createSuccessResponse(const QString& message) const;
     void sendData(QTcpSocket* socket, const QByteArray& data);
     void processSocketData(QTcpSocket* socket);
     void cleanupClient();
+    void loadAntennaTypes();
+
+    void createAntennaInThread(const QString& type);
 
 private:
-    IAntenn* m_p_antenn;
     QTcpServer* m_server;
     quint16 m_serverPort;
     QAtomicInt m_isRunning;
 
-    // Клиент
+    // РљР»РёРµРЅС‚
     QTcpSocket* m_clientSocket;
     QAtomicInt m_hasClient;
     SocketBuffer m_clientBuffer;
+
+    QPointer<IAntenn> m_p_antenn;  
+    QPointer<QThread> m_antennaThread;
+    QAtomicInt m_isSwitching;
 
     static const QStringList MANAGER_COMMANDS;
     static constexpr int MAX_MESSAGE_SIZE = 10 * 1024 * 1024;
@@ -241,3 +258,4 @@ private:
 };
 
 #endif // EMULATOR_H
+
