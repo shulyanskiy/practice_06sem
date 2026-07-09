@@ -4,11 +4,12 @@
 #include <QTextStream>
 #include <QCoreApplication>
 #include <QTimerEvent>
+#include <QThread>
 
-const QString MyAntenn::DEFAULT_CONFIG_PATH = "config/antenna_config.ini";
 
-MyAntenn::MyAntenn(QObject* parent)
+MyAntenn::MyAntenn(const QString& type, QObject* parent)
     : IAntenn(parent)
+    , m_antennaType(type.isEmpty() ? "Default" : type)
     , m_azimuth(0.0)
     , m_elevation(0.0)
     , m_polarization(0.0)
@@ -34,14 +35,8 @@ MyAntenn::MyAntenn(QObject* parent)
     , m_defaultElevation(0.0)
     , m_defaultPolarization(0.0)
     , m_defaultSpeedMode(0)
-{
-    // Загружаем конфигурацию
-    if (!loadConfig(DEFAULT_CONFIG_PATH)) {
-        loadDefaultConfig();
-    }
-
-    applyConfig();
-    emit infoOccurred("MyAntenn instance created");
+{   
+    emit infoOccurred("MyAntenn instance created: " + m_antennaType);
 }
 
 MyAntenn::~MyAntenn()
@@ -58,31 +53,6 @@ MyAntenn::~MyAntenn()
     emit infoOccurred("MyAntenn destroyed");
 }
 
-void MyAntenn::loadDefaultConfig()
-{
-    m_speedModes.clear();
-    m_speedModes << 5.0 << 10.0 << 20.0 << 30.0 << 50.0;
-    m_defaultAzimuth = 0.0;
-    m_defaultElevation = 0.0;
-    m_defaultPolarization = 0.0;
-    m_configPath = DEFAULT_CONFIG_PATH;
-    m_speedMode = 0;
-    m_defaultSpeedMode = 0;
-    m_currentSpeed = m_speedModes.value(0, 10.0);
-
-    // Устанавливаем ограничения по умолчанию
-    m_minAzimuth = 0.0;
-    m_maxAzimuth = 360.0;
-    m_minElevation = -90.0;
-    m_maxElevation = 90.0;
-    m_minPolarization = -180.0;
-    m_maxPolarization = 180.0;
-    m_maxSpeed = 50.0;
-
-    if (!m_settings) {
-        m_settings = new QSettings(m_configPath, QSettings::IniFormat, this);
-    }
-}
 
 void MyAntenn::loadLimits()
 {
@@ -100,7 +70,7 @@ void MyAntenn::loadLimits()
 bool MyAntenn::loadConfig(const QString& configPath)
 {
     if (!QFile::exists(configPath)) {
-        emit warningOccurred("Config file not found: " + configPath);
+        emit errorOccurred("Config file not found: " + configPath);
         return false;
     }
 
@@ -112,37 +82,52 @@ bool MyAntenn::loadConfig(const QString& configPath)
     m_configPath = configPath;
     m_settings = new QSettings(configPath, QSettings::IniFormat, this);
 
+
+    int modeCount = m_settings->value("SpeedModes/Count", 0).toInt();
+    if (modeCount == 0) {
+        emit errorOccurred("No speed modes found in config: " + configPath);
+        return false;
+    }
+
     // Читаем настройки скоростей
     m_speedModes.clear();
     m_speedModeNames.clear();
-
-    int modeCount = m_settings->value("SpeedModes/Count", 5).toInt();
     for (int i = 0; i < modeCount; ++i) {
-        // Читаем скорость
         QString key = QString("SpeedModes/Mode%1").arg(i);
-        double speed = m_settings->value(key, 10.0).toDouble();
+        double speed = m_settings->value(key, -1.0).toDouble();
+        if (speed < 0) {
+            emit errorOccurred("Invalid speed value for mode " + QString::number(i));
+            return false;
+        }
         m_speedModes.append(speed);
 
         QString nameKey = QString("SpeedModes/Name%1").arg(i);
-        QString name = m_settings->value(nameKey, QString("Mode %1").arg(i)).toString();
+        QString name = m_settings->value(nameKey, "").toString();
+        if (name.isEmpty()) {
+            emit errorOccurred("Missing name for speed mode " + QString::number(i));
+            return false;
+        }
         m_speedModeNames.append(name);
-    }
-
-    if (m_speedModes.isEmpty()) {
-        m_speedModes << 5.0 << 10.0 << 20.0 << 30.0 << 50.0;
-        m_speedModeNames << "Slow" << "Normal" << "Fast" << "Very Fast" << "Extreme";
     }
 
     // Читаем настройки по умолчанию
     m_defaultAzimuth = m_settings->value("Default/Azimuth", 0.0).toDouble();
     m_defaultElevation = m_settings->value("Default/Elevation", 0.0).toDouble();
     m_defaultPolarization = m_settings->value("Default/Polarization", 0.0).toDouble();
-    m_defaultSpeedMode = m_settings->value("Default/SpeedMode", 0).toInt();
+    m_defaultSpeedMode = m_settings->value("Default/SpeedMode", -1).toInt();
+
+    if (m_defaultSpeedMode < 0 || m_defaultSpeedMode >= m_speedModes.size()) {
+        emit errorOccurred("Invalid default speed mode: " + QString::number(m_defaultSpeedMode));
+        return false;
+    }
 
     // Читаем ограничения
     loadLimits();
 
-    emit infoOccurred("Config loaded from: " + configPath);
+    // ПРИМЕНЯЕМ КОНФИГ
+    applyConfig();
+
+    emit infoOccurred("Config loaded and applied from: " + configPath);
     return true;
 }
 
@@ -152,19 +137,16 @@ bool MyAntenn::saveConfig(const QString& configPath)
         m_settings = new QSettings(configPath, QSettings::IniFormat, this);
     }
 
-    // Сохраняем режимы скоростей
     m_settings->setValue("SpeedModes/Count", m_speedModes.size());
     for (int i = 0; i < m_speedModes.size(); ++i) {
         m_settings->setValue(QString("SpeedModes/Mode%1").arg(i), m_speedModes[i]);
     }
 
-    // Сохраняем значения по умолчанию
     m_settings->setValue("Default/Azimuth", m_defaultAzimuth);
     m_settings->setValue("Default/Elevation", m_defaultElevation);
     m_settings->setValue("Default/Polarization", m_defaultPolarization);
     m_settings->setValue("Default/SpeedMode", m_defaultSpeedMode);
 
-    // Сохраняем ограничения
     m_settings->setValue("Limits/MinAzimuth", m_minAzimuth);
     m_settings->setValue("Limits/MaxAzimuth", m_maxAzimuth);
     m_settings->setValue("Limits/MinElevation", m_minElevation);
@@ -188,12 +170,16 @@ void MyAntenn::applyConfig()
 {
     QMutexLocker locker(&m_dataMutex);
 
-    // Проверяем, что значения по умолчанию в пределах ограничений
+    // Проверяем, что значения загружены
+    if (m_speedModes.isEmpty()) {
+        emit errorOccurred("Cannot apply config: speed modes are empty!");
+        return;
+    }
+
     m_defaultAzimuth = qBound(m_minAzimuth, m_defaultAzimuth, m_maxAzimuth);
     m_defaultElevation = qBound(m_minElevation, m_defaultElevation, m_maxElevation);
     m_defaultPolarization = qBound(m_minPolarization, m_defaultPolarization, m_maxPolarization);
 
-    // Устанавливаем текущие значения в default (без циклической нормализации)
     m_azimuth = m_defaultAzimuth;
     m_elevation = m_defaultElevation;
     m_polarization = m_defaultPolarization;
@@ -201,7 +187,6 @@ void MyAntenn::applyConfig()
     m_targetElevation = m_defaultElevation;
     m_targetPolarization = m_defaultPolarization;
 
-    // Устанавливаем режим скорости
     if (m_defaultSpeedMode >= 0 && m_defaultSpeedMode < m_speedModes.size()) {
         m_speedMode = m_defaultSpeedMode;
         m_currentSpeed = m_speedModes[m_defaultSpeedMode];
@@ -211,27 +196,36 @@ void MyAntenn::applyConfig()
         m_currentSpeed = m_speedModes.value(0, 10.0);
     }
 
-    // Ограничиваем скорость сверху
     m_currentSpeed = qBound(0.0, m_currentSpeed, m_maxSpeed);
 
     m_isMoving = false;
     m_isCalibrated = true;
+
+    emit infoOccurred("Config applied: speedMode=" + QString::number(m_speedMode) +
+        ", speed=" + QString::number(m_currentSpeed, 'f', 1) + " deg/s");
 }
 
-bool MyAntenn::setAzimuth(double azimuth)
+void MyAntenn::setPosition(double azimuth, double elevation, double polarization)
+{
+    setAzimuth(azimuth);
+    setElevation(elevation);
+    setPolarization(polarization);
+}
+
+void MyAntenn::setAzimuth(double azimuth)
 {
     QMutexLocker locker(&m_dataMutex);
 
     if (!m_isRunning) {
         emit warningOccurred("Cannot set azimuth: antenna is stopped");
-        return false;
+        return;
     }
 
     if (azimuth < m_minAzimuth || azimuth > m_maxAzimuth) {
         emit errorOccurred("Azimuth " + QString::number(azimuth) +
             " is out of range [" + QString::number(m_minAzimuth) +
             ", " + QString::number(m_maxAzimuth) + "]");
-        return false;
+        return;
     }
 
     m_targetAzimuth = azimuth;
@@ -244,24 +238,22 @@ bool MyAntenn::setAzimuth(double azimuth)
 
     emit movementStarted();
     emit infoOccurred("Target azimuth set to: " + QString::number(m_targetAzimuth, 'f', 2));
-    return true;
 }
 
-bool MyAntenn::setElevation(double elevation)
+void MyAntenn::setElevation(double elevation)
 {
     QMutexLocker locker(&m_dataMutex);
 
     if (!m_isRunning) {
         emit warningOccurred("Cannot set elevation: antenna is stopped");
-        return false;
+        return;
     }
 
-    // Проверяем, что угол места в пределах допустимых значений
     if (elevation < m_minElevation || elevation > m_maxElevation) {
         emit errorOccurred("Elevation " + QString::number(elevation) +
             " is out of range [" + QString::number(m_minElevation) +
             ", " + QString::number(m_maxElevation) + "]");
-        return false;
+        return;
     }
 
     m_targetElevation = elevation;
@@ -274,24 +266,22 @@ bool MyAntenn::setElevation(double elevation)
 
     emit movementStarted();
     emit infoOccurred("Target elevation set to: " + QString::number(m_targetElevation, 'f', 2));
-    return true;
 }
 
-bool MyAntenn::setPolarization(double polarization)
+void MyAntenn::setPolarization(double polarization)
 {
     QMutexLocker locker(&m_dataMutex);
 
     if (!m_isRunning) {
         emit warningOccurred("Cannot set polarization: antenna is stopped");
-        return false;
+        return;
     }
 
-    // Проверяем, что поляризация в пределах допустимых значений
     if (polarization < m_minPolarization || polarization > m_maxPolarization) {
         emit errorOccurred("Polarization " + QString::number(polarization) +
             " is out of range [" + QString::number(m_minPolarization) +
             ", " + QString::number(m_maxPolarization) + "]");
-        return false;
+        return;
     }
 
     m_targetPolarization = polarization;
@@ -304,17 +294,16 @@ bool MyAntenn::setPolarization(double polarization)
 
     emit movementStarted();
     emit infoOccurred("Target polarization set to: " + QString::number(m_targetPolarization, 'f', 2));
-    return true;
 }
 
-bool MyAntenn::setSpeedMode(int mode)
+void MyAntenn::setSpeedMode(int mode)
 {
     QMutexLocker locker(&m_dataMutex);
 
     if (mode < 0 || mode >= m_speedModes.size()) {
         emit errorOccurred("Invalid speed mode: " + QString::number(mode) +
             ". Available modes: 0-" + QString::number(m_speedModes.size() - 1));
-        return false;
+        return;
     }
 
     m_speedMode = mode;
@@ -322,10 +311,9 @@ bool MyAntenn::setSpeedMode(int mode)
 
     emit infoOccurred("Speed mode set to: " + QString::number(mode) +
         " (" + QString::number(m_currentSpeed, 'f', 1) + " deg/sec)");
-    return true;
 }
 
-void MyAntenn::calibrate()
+void MyAntenn::reset()
 {
     QMutexLocker locker(&m_dataMutex);
 
@@ -343,10 +331,9 @@ void MyAntenn::calibrate()
         m_timerActive = false;
     }
 
-    emit calibrated();
-    emit infoOccurred("Antenna calibrated to default position");
+    emit resetDone();
+    emit infoOccurred("Antenna reset to default position");
 }
-
 
 void MyAntenn::processMovement()
 {
@@ -363,14 +350,10 @@ void MyAntenn::processMovement()
     bool elevationReached = false;
     bool polarizationReached = false;
 
-    // ===== Движение по азимуту (БЕЗ оптимизации кратчайшего пути) =====
     double diffAzimuth = m_targetAzimuth - m_azimuth;
-
     if (std::abs(diffAzimuth) > 0.001) {
         double step = qBound(-maxDelta, diffAzimuth, maxDelta);
         m_azimuth += step;
-
-        // Нормализация в пределах [minAzimuth, maxAzimuth]
         m_azimuth = qBound(m_minAzimuth, m_azimuth, m_maxAzimuth);
     }
     else {
@@ -378,7 +361,6 @@ void MyAntenn::processMovement()
         azimuthReached = true;
     }
 
-    // ===== Движение по углу места =====
     double diffElevation = m_targetElevation - m_elevation;
     if (std::abs(diffElevation) > 0.001) {
         double step = qBound(-maxDelta, diffElevation, maxDelta);
@@ -390,7 +372,6 @@ void MyAntenn::processMovement()
         elevationReached = true;
     }
 
-    // ===== Движение по поляризации (БЕЗ оптимизации) =====
     double diffPolarization = m_targetPolarization - m_polarization;
     if (std::abs(diffPolarization) > 0.001) {
         double step = qBound(-maxDelta, diffPolarization, maxDelta);
@@ -402,7 +383,6 @@ void MyAntenn::processMovement()
         polarizationReached = true;
     }
 
-    // Проверка достижения цели
     if (azimuthReached && elevationReached && polarizationReached) {
         m_isMoving = false;
         if (m_timerActive) {
@@ -422,20 +402,18 @@ void MyAntenn::timerEvent(QTimerEvent* event)
         processMovement();
 }
 
-bool MyAntenn::start()
+void MyAntenn::start()
 {
     if (m_isRunning.testAndSetOrdered(0, 1)) {
         m_startTime = QDateTime::currentDateTime();
         emit infoOccurred("MyAntenn started");
-        return true;
     }
     else {
         emit warningOccurred("MyAntenn already running");
-        return false;
     }
 }
 
-bool MyAntenn::stop()
+void MyAntenn::stop()
 {
     if (m_isRunning.testAndSetOrdered(1, 0)) {
         if (m_timerActive) {
@@ -445,11 +423,9 @@ bool MyAntenn::stop()
         m_isMoving = false;
         emit movementStopped();
         emit infoOccurred("MyAntenn stopped");
-        return true;
     }
     else {
         emit warningOccurred("MyAntenn already stopped");
-        return false;
     }
 }
 
@@ -462,7 +438,10 @@ AntennaStatus MyAntenn::getStatus() const
 {
     QMutexLocker locker(&m_dataMutex);
 
+    qDebug() << "MyAntenn::getStatus : ThreadID -> " << QThread::currentThreadId();
+
     AntennaStatus status;
+    status.type = m_antennaType;
     status.azimuth = m_azimuth;
     status.elevation = m_elevation;
     status.polarization = m_polarization;
@@ -484,8 +463,6 @@ AntennaConfig MyAntenn::getConfig() const
     QMutexLocker locker(&m_dataMutex);
 
     AntennaConfig config;
-
-    // Лимиты
     config.limits.minAzimuth = m_minAzimuth;
     config.limits.maxAzimuth = m_maxAzimuth;
     config.limits.minElevation = m_minElevation;
@@ -494,7 +471,6 @@ AntennaConfig MyAntenn::getConfig() const
     config.limits.maxPolarization = m_maxPolarization;
     config.limits.maxSpeed = m_maxSpeed;
 
-    // Режимы скоростей (с именами)
     config.speedModes.clear();
     for (int i = 0; i < m_speedModes.size(); ++i) {
         QString name = (i < m_speedModeNames.size()) ?
@@ -503,7 +479,6 @@ AntennaConfig MyAntenn::getConfig() const
         config.speedModes.append(SpeedMode(i, name, m_speedModes[i]));
     }
 
-    // Значения по умолчанию
     config.defaultAzimuth = m_defaultAzimuth;
     config.defaultElevation = m_defaultElevation;
     config.defaultPolarization = m_defaultPolarization;
